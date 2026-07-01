@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0A1420" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>Breakline — SST Chart</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  :root{
+    --bg-deep:#0A1420;
+    --bg-panel:#101E30;
+    --bg-panel-raised:#16293F;
+    --border-subtle:#22364C;
+    --text-primary:#E9EEF4;
+    --text-secondary:#8CA0B8;
+    --text-tertiary:#5E7288;
+    --accent-warm:#FF8A3D;
+    --accent-cool:#4FC3D9;
+    --danger:#E2574C;
+    --font-display:'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    --font-body:'Inter', ui-sans-serif, system-ui, sans-serif;
+    --font-mono:'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  *,*::before,*::after{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; padding:0; overflow:hidden; overscroll-behavior:none; -webkit-tap-highlight-color:transparent; }
+  body{ background:var(--bg-deep); font-family:var(--font-body); color:var(--text-primary); }
+  button,input{ font:inherit; color:inherit; }
+  button{ touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+  button:focus-visible, input:focus-visible, .spot-item:focus-visible{ outline:2px solid var(--accent-cool); outline-offset:2px; }
+  ul{ list-style:none; }
+  svg{ display:block; }
+
+  .app{ height:100vh; height:100dvh; display:flex; flex-direction:column; overflow:hidden; }
+
+  /* ---------- Topbar ---------- */
+  .topbar{
+    display:flex; align-items:center; flex-shrink:0;
+    padding:14px 18px; padding-top:max(14px, env(safe-area-inset-top));
+    border-bottom:1px solid var(--border-subtle); background:var(--bg-panel);
+  }
+  .topbar-brand{ display:flex; align-items:center; gap:9px; }
+  .brand-glyph{ width:24px; height:15px; color:var(--accent-warm); flex-shrink:0; }
+  .brand-glyph path{ fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  .brand-word{ font-family:var(--font-display); font-weight:700; font-size:16px; letter-spacing:0.09em; color:var(--text-primary); }
+
+  /* ---------- Views ---------- */
+  .views{ flex:1; min-height:0; position:relative; }
+  .view{ position:absolute; inset:0; display:none; flex-direction:column; }
+  .view.active{ display:flex; }
+  #view-spots, #view-info{ overflow-y:auto; -webkit-overflow-scrolling:touch; }
+
+  /* ---------- Chart view ---------- */
+  .date-chip-row{
+    display:flex; gap:8px; padding:12px 16px; overflow-x:auto; flex-shrink:0;
+    background:var(--bg-panel); -webkit-overflow-scrolling:touch; scrollbar-width:none;
+  }
+  .date-chip-row::-webkit-scrollbar{ display:none; }
+  .date-chip{
+    flex-shrink:0; padding:7px 15px; border-radius:999px; cursor:pointer;
+    background:var(--bg-panel-raised); border:1px solid var(--border-subtle);
+    color:var(--text-secondary); font-family:var(--font-mono); font-size:12.5px; font-weight:500;
+  }
+  .date-chip.active{ background:var(--accent-warm); border-color:var(--accent-warm); color:#1A0E00; font-weight:600; }
+
+  .map-wrap{ position:relative; flex:1; min-height:0; background:var(--bg-deep); }
+  #map{ position:absolute; inset:0; background:var(--bg-deep); }
+
+  .map-ui{ position:absolute; z-index:900; }
+
+  .loading-pill{
+    top:50%; left:50%; transform:translate(-50%,-50%);
+    background:var(--bg-panel-raised); padding:10px 16px; border-radius:999px;
+    font-family:var(--font-mono); font-size:12px; color:var(--text-secondary);
+    box-shadow:0 4px 14px rgba(0,0,0,0.35); transition:opacity .3s ease, visibility .3s ease;
+    border:1px solid var(--border-subtle);
+  }
+  .loading-pill.hidden{ opacity:0; visibility:hidden; }
+
+  .data-banner{
+    top:12px; left:12px; right:12px; z-index:950;
+    background:var(--bg-panel-raised); border-left:3px solid var(--accent-warm); border-radius:10px;
+    padding:10px 12px; display:flex; align-items:center; justify-content:space-between; gap:10px;
+    box-shadow:0 4px 14px rgba(0,0,0,0.35);
+    transform:translateY(-140%); opacity:0; pointer-events:none;
+    transition:transform .3s ease, opacity .3s ease;
+  }
+  .data-banner.visible{ transform:translateY(0); opacity:1; pointer-events:auto; }
+  .data-banner span{ font-size:12.5px; color:var(--text-primary); line-height:1.4; }
+
+  .legend-gauge{
+    top:16px; right:12px; width:56px;
+    display:flex; flex-direction:column; align-items:center;
+    background:rgba(16,30,48,0.8); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    border:1px solid var(--border-subtle); border-radius:14px; padding:10px 8px;
+    box-shadow:0 4px 14px rgba(0,0,0,0.35);
+  }
+  .gauge-unit{ font-family:var(--font-mono); font-size:10px; color:var(--text-tertiary); margin-bottom:7px; letter-spacing:0.05em; }
+  .gauge-body{ display:flex; align-items:stretch; gap:6px; height:168px; }
+  .gauge-bar{
+    width:10px; border-radius:6px;
+    background:linear-gradient(to top,#2B0B5E 0%,#1D4E9B 20%,#178FA8 40%,#3FAE6E 55%,#F5D547 68%,#F2812C 84%,#D62828 100%);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,0.08);
+  }
+  .gauge-ticks{ display:flex; flex-direction:column; justify-content:space-between; padding:1px 0; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); }
+  .gauge-caption{ font-family:var(--font-body); font-size:9px; color:var(--text-tertiary); margin-top:7px; font-style:italic; }
+
+  .fab{
+    right:16px; bottom:16px; width:48px; height:48px; border-radius:50%;
+    background:var(--bg-panel-raised); border:1px solid var(--border-subtle);
+    display:flex; align-items:center; justify-content:center; color:var(--text-primary);
+    box-shadow:0 4px 14px rgba(0,0,0,0.4); cursor:pointer;
+  }
+  .fab:active{ background:var(--bg-panel); }
+  .fab svg{ width:22px; height:22px; }
+
+  .coord-card{
+    left:0; right:0; bottom:0; z-index:950;
+    background:var(--bg-panel); border-top:1px solid var(--border-subtle);
+    border-radius:18px 18px 0 0; padding:14px 16px calc(14px + env(safe-area-inset-bottom));
+    box-shadow:0 -6px 20px rgba(0,0,0,0.4);
+    transform:translateY(115%); transition:transform .28s cubic-bezier(.2,.8,.3,1);
+  }
+  .coord-card.visible{ transform:translateY(0); }
+  .coord-card-top{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+  .coord-readout{ display:flex; flex-direction:column; gap:2px; }
+  .coord-label{ font-family:var(--font-mono); font-size:10px; letter-spacing:0.1em; color:var(--text-tertiary); }
+  .coord-value{ font-family:var(--font-mono); font-size:15px; color:var(--text-primary); font-weight:500; }
+  .coord-card-form{ display:flex; gap:8px; }
+  #spot-name-input{
+    flex:1; background:var(--bg-panel-raised); border:1px solid var(--border-subtle); border-radius:10px;
+    padding:10px 12px; color:var(--text-primary); font-family:var(--font-body); font-size:16px; min-width:0;
+  }
+  #spot-name-input::placeholder{ color:var(--text-tertiary); }
+  .btn-primary{
+    background:var(--accent-warm); color:#1A0E00; border:none; border-radius:10px; padding:0 18px;
+    font-family:var(--font-body); font-weight:600; font-size:14px; cursor:pointer; flex-shrink:0;
+  }
+
+  .icon-btn{ background:none; border:none; color:var(--text-secondary); width:28px; height:28px; display:flex; align-items:center; justify-content:center; cursor:pointer; padding:0; }
+  .icon-btn svg{ width:18px; height:18px; }
+  .icon-btn:hover{ color:var(--text-primary); }
+
+  /* ---------- Spots view ---------- */
+  .section-header{ display:flex; align-items:center; justify-content:space-between; padding:18px 18px 6px; flex-shrink:0; }
+  .section-header h2{ font-family:var(--font-display); font-size:19px; font-weight:600; color:var(--text-primary); margin:0; }
+  .count-badge{ font-family:var(--font-mono); font-size:12px; color:var(--text-secondary); background:var(--bg-panel-raised); border:1px solid var(--border-subtle); padding:2px 9px; border-radius:999px; }
+
+  .spots-list{ display:flex; flex-direction:column; gap:10px; padding:12px 16px 24px; }
+  .spot-item{ display:flex; align-items:center; justify-content:space-between; gap:10px; background:var(--bg-panel); border:1px solid var(--border-subtle); border-radius:14px; padding:13px 14px; cursor:pointer; }
+  .spot-item-main{ display:flex; flex-direction:column; gap:3px; flex:1; min-width:0; }
+  .spot-item-name{ font-family:var(--font-display); font-weight:600; font-size:14.5px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .spot-item-coords{ font-family:var(--font-mono); font-size:12px; color:var(--text-secondary); }
+  .spot-item-date{ font-family:var(--font-body); font-size:11.5px; color:var(--text-tertiary); }
+  .spot-delete{ color:var(--text-tertiary); flex-shrink:0; }
+  .spot-delete:hover{ color:var(--danger); }
+
+  .empty-state{ text-align:center; padding:70px 30px 30px; color:var(--text-tertiary); }
+  .empty-state svg{ width:38px; height:38px; margin:0 auto 14px; opacity:0.5; }
+  .empty-state p{ font-family:var(--font-body); font-size:13.5px; line-height:1.55; margin:0; }
+
+  /* ---------- Info view ---------- */
+  .info-content{ padding:8px 20px 40px; }
+  .info-content h2{ font-family:var(--font-display); font-size:16px; font-weight:600; color:var(--text-primary); margin:22px 0 8px; }
+  .info-content h2:first-child{ margin-top:14px; }
+  .info-content p{ font-family:var(--font-body); font-size:13.5px; line-height:1.65; color:var(--text-secondary); margin:0 0 4px; }
+  .info-content ul{ margin:8px 0 0; padding-left:2px; }
+  .info-content li{ font-family:var(--font-body); font-size:13.5px; line-height:1.6; color:var(--text-secondary); margin-bottom:7px; padding-left:16px; position:relative; }
+  .info-content li::before{ content:'—'; position:absolute; left:0; color:var(--accent-cool); }
+  .info-attribution{ margin-top:26px; padding-top:16px; border-top:1px solid var(--border-subtle); }
+  .info-attribution p{ color:var(--text-tertiary); font-size:12px; }
+
+  /* ---------- Tabbar ---------- */
+  .tabbar{
+    display:flex; border-top:1px solid var(--border-subtle); background:var(--bg-panel);
+    padding-bottom:env(safe-area-inset-bottom); flex-shrink:0;
+  }
+  .tab-btn{
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+    background:none; border:none; padding:9px 0 8px; color:var(--text-secondary); cursor:pointer;
+    font-family:var(--font-body); font-size:10.5px; font-weight:500;
+  }
+  .tab-btn svg{ width:22px; height:22px; }
+  .tab-btn.active{ color:var(--accent-warm); }
+
+  /* ---------- Leaflet overrides ---------- */
+  .leaflet-control-zoom a{ background:var(--bg-panel-raised) !important; color:var(--text-primary) !important; border-color:var(--border-subtle) !important; }
+  .leaflet-control-zoom a:hover{ background:var(--bg-panel) !important; }
+  .leaflet-control-attribution{ background:rgba(16,30,48,0.75) !important; color:var(--text-tertiary) !important; font-size:9.5px !important; }
+  .leaflet-control-attribution a{ color:var(--accent-cool) !important; }
+  .leaflet-popup-content-wrapper{ background:var(--bg-panel-raised); color:var(--text-primary); border-radius:12px; box-shadow:0 6px 20px rgba(0,0,0,0.45); }
+  .leaflet-popup-tip{ background:var(--bg-panel-raised); }
+  .leaflet-popup-content{ margin:12px 14px; font-family:var(--font-body); }
+  .leaflet-container a.leaflet-popup-close-button{ color:var(--text-secondary); }
+  .spot-popup-name{ font-family:var(--font-display); font-weight:600; font-size:14px; margin-bottom:4px; }
+  .spot-popup-coords{ font-family:var(--font-mono); font-size:12px; color:var(--text-secondary); margin-bottom:9px; }
+  .spot-popup-delete{ font-family:var(--font-body); font-size:12px; color:var(--danger); background:none; border:none; padding:0; cursor:pointer; font-weight:600; }
+  .spot-marker-icon{ color:var(--accent-warm); filter:drop-shadow(0 2px 3px rgba(0,0,0,0.55)); }
+
+  @media (prefers-reduced-motion:reduce){
+    *{ transition-duration:0.01ms !important; animation-duration:0.01ms !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="topbar-brand">
+      <svg class="brand-glyph" viewBox="0 0 24 15"><path d="M1 8 L8 8 L10.5 2 L13.5 13 L16 8 L23 8"/></svg>
+      <span class="brand-word">BREAKLINE</span>
+    </div>
+  </header>
+
+  <main class="views">
+
+    <!-- CHART -->
+    <section id="view-chart" class="view active">
+      <div class="date-chip-row" id="date-chips"></div>
+      <div class="map-wrap">
+        <div id="map"></div>
+
+        <div class="loading-pill map-ui" id="loading-pill">Loading sea surface data…</div>
+
+        <div class="data-banner map-ui" id="data-banner">
+          <span>Live temperature data is slow to respond. Try a different date, or check your connection.</span>
+          <button class="icon-btn" id="banner-dismiss" aria-label="Dismiss">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+          </button>
+        </div>
+
+        <div class="legend-gauge map-ui">
+          <span class="gauge-unit">°F</span>
+          <div class="gauge-body">
+            <div class="gauge-bar"></div>
+            <div class="gauge-ticks"><span>85</span><span>75</span><span>65</span><span>55</span></div>
+          </div>
+          <span class="gauge-caption">approx.</span>
+        </div>
+
+        <button class="fab map-ui" id="fab-recenter" aria-label="Recenter on Gulf Stream">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>
+        </button>
+
+        <div class="coord-card map-ui" id="coord-card">
+          <div class="coord-card-top">
+            <div class="coord-readout">
+              <span class="coord-label">MARK</span>
+              <span class="coord-value" id="coord-text">—</span>
+            </div>
+            <button class="icon-btn" id="coord-dismiss" aria-label="Dismiss">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+            </button>
+          </div>
+          <div class="coord-card-form">
+            <input type="text" id="spot-name-input" maxlength="40" placeholder="Name this spot" autocomplete="off" />
+            <button class="btn-primary" id="save-spot-btn">Save</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SPOTS -->
+    <section id="view-spots" class="view">
+      <div class="section-header">
+        <h2>Saved Spots</h2>
+        <span class="count-badge" id="spots-count">0</span>
+      </div>
+      <div class="spots-list" id="spots-list"></div>
+    </section>
+
+    <!-- INFO -->
+    <section id="view-info" class="view">
+      <div class="info-content">
+        <h2>What's a break?</h2>
+        <p>A temperature break is where two bodies of water meet — warm Gulf Stream water against cooler shelf water, or the edge of an eddy that's spun off the main current. Bait gets pushed along these edges, and predators follow. The tighter the color change on the chart, the sharper the break.</p>
+
+        <h2>Reading the gauge</h2>
+        <p>Color shows sea surface temperature, from cold (deep blue/purple) to warm (red). This isn't a nautical chart — think of it as an overlay for spotting structure in the water itself. Values are approximate; confirm with your boat's temp gauge on site.</p>
+
+        <h2>On the water</h2>
+        <ul>
+          <li>Work the up-current edge of a warm eddy first — bait tends to stack there.</li>
+          <li>A break that's held steady for a few days usually fishes better than one that just formed.</li>
+          <li>Color alone won't show current speed or clarity — pair this with local reports.</li>
+        </ul>
+
+        <h2>About this data</h2>
+        <p>Sea surface temperature comes from NASA's GHRSST MUR analysis (~1km resolution, updated daily), served through NASA's Global Imagery Browse Services. Imagery can lag a day or two behind real time depending on satellite processing.</p>
+
+        <div class="info-attribution">
+          <h2 style="margin-top:0">About this prototype</h2>
+          <p>This is a working preview built for the web so you can try it right now — no app-store install needed. A native iOS/Android build would add push alerts when a break forms near a saved spot, offline chart caching, and on-device GPS. Your saved spots persist privately across visits.</p>
+          <p>Basemap © OpenStreetMap contributors, © CARTO. Sea surface temperature imagery courtesy NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="tabbar">
+    <button class="tab-btn active" data-tab="chart">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/><path d="M2 15c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/></svg>
+      <span>Chart</span>
+    </button>
+    <button class="tab-btn" data-tab="spots">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-7.8 7-12.5A7 7 0 1 0 5 8.5C5 13.2 12 21 12 21z"/><circle cx="12" cy="8.5" r="2.4"/></svg>
+      <span>Spots</span>
+    </button>
+    <button class="tab-btn" data-tab="info">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16.2"/><circle cx="12" cy="7.6" r="0.7" fill="currentColor" stroke="none"/></svg>
+      <span>Info</span>
+    </button>
+  </nav>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+  'use strict';
+
+  var DEFAULT_CENTER = [34.3, -74.5];
+  var DEFAULT_ZOOM = 7;
+
+  var map, sstLayer, spotMarkersLayer, tempMarker;
+  var spots = [];
+  var pendingSpot = null;
+  var tileErrorCount = 0;
+  var bannerShown = false;
+
+  document.addEventListener('DOMContentLoaded', init);
+
+  async function init(){
+    initMap();
+    initDateChips();
+    initTabs();
+    wireChartControls();
+    await loadSpots();
+    renderSpotMarkers();
+    renderSpotsList();
+  }
+
+  /* ---------------- Map ---------------- */
+
+  function initMap(){
+    map = L.map('map', {
+      center: DEFAULT_CENTER,
+      zoom: DEFAULT_ZOOM,
+      minZoom: 3,
+      maxZoom: 12
+    });
+
+    var retina = L.Browser.retina ? '@2x' : '';
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}' + retina + '.png', {
+      subdomains: 'abcd',
+      maxZoom: 20,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+    }).addTo(map);
+
+    sstLayer = L.tileLayer(
+      'https://gibs-{s}.earthdata.nasa.gov/wmts/epsg3857/best/{layer}/default/{time}/{tileMatrixSet}/{z}/{y}/{x}.png',
+      {
+        layer: 'GHRSST_L4_MUR_Sea_Surface_Temperature',
+        tileMatrixSet: 'GoogleMapsCompatible_Level7',
+        time: 'default',
+        subdomains: 'abc',
+        tileSize: 256,
+        maxNativeZoom: 7,
+        maxZoom: 12,
+        noWrap: true,
+        opacity: 0.9,
+        bounds: [[-85.0511287776, -179.999999975], [85.0511287776, 179.999999975]],
+        attribution: 'SST: NASA GIBS (GHRSST MUR)'
+      }
+    ).addTo(map);
+
+    sstLayer.on('tileerror', function(){
+      tileErrorCount++;
+      if (tileErrorCount >= 6 && !bannerShown) {
+        bannerShown = true;
+        document.getElementById('data-banner').classList.add('visible');
+      }
+    });
+    sstLayer.on('load', function(){
+      document.getElementById('loading-pill').classList.add('hidden');
+    });
+
+    spotMarkersLayer = L.layerGroup().addTo(map);
+
+    map.on('click', onMapClick);
+
+    setTimeout(function(){ map.invalidateSize(); }, 120);
+  }
+
+  /* ---------------- Date chips ---------------- */
+
+  function pad(n){ return n < 10 ? '0' + n : '' + n; }
+
+  function isoDate(d){
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function initDateChips(){
+    var container = document.getElementById('date-chips');
+    var today = new Date();
+    var chips = [{ label: 'Latest', value: 'default' }];
+    for (var i = 1; i <= 4; i++) {
+      var d = new Date(today);
+      d.setDate(d.getDate() - i);
+      chips.push({ label: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), value: isoDate(d) });
+    }
+    container.innerHTML = '';
+    chips.forEach(function(chip, idx){
+      var btn = document.createElement('button');
+      btn.className = 'date-chip' + (idx === 0 ? ' active' : '');
+      btn.type = 'button';
+      btn.textContent = chip.label;
+      btn.addEventListener('click', function(){ selectDateChip(btn, chip.value); });
+      container.appendChild(btn);
+    });
+  }
+
+  function selectDateChip(btn, value){
+    var all = document.querySelectorAll('.date-chip');
+    for (var i = 0; i < all.length; i++) all[i].classList.remove('active');
+    btn.classList.add('active');
+    sstLayer.options.time = value;
+    document.getElementById('loading-pill').classList.remove('hidden');
+    sstLayer.redraw();
+  }
+
+  /* ---------------- Coordinates & spots ---------------- */
+
+  function formatDDM(lat, lng){
+    function part(value, posLetter, negLetter){
+      var letter = value >= 0 ? posLetter : negLetter;
+      var abs = Math.abs(value);
+      var deg = Math.floor(abs);
+      var min = (abs - deg) * 60;
+      return deg + '\u00B0 ' + min.toFixed(2) + '\u2032 ' + letter;
+    }
+    return part(lat, 'N', 'S') + '   ' + part(lng, 'E', 'W');
+  }
+
+  function onMapClick(e){
+    pendingSpot = { lat: e.latlng.lat, lng: e.latlng.lng };
+    if (tempMarker) map.removeLayer(tempMarker);
+    tempMarker = L.circleMarker(e.latlng, {
+      radius: 7, color: '#FF8A3D', weight: 2, fillColor: '#FF8A3D', fillOpacity: 0.85
+    }).addTo(map);
+    document.getElementById('coord-text').textContent = formatDDM(pendingSpot.lat, pendingSpot.lng);
+    document.getElementById('coord-card').classList.add('visible');
+  }
+
+  function hideCoordCard(){
+    document.getElementById('coord-card').classList.remove('visible');
+    if (tempMarker) { map.removeLayer(tempMarker); tempMarker = null; }
+    pendingSpot = null;
+    document.getElementById('spot-name-input').value = '';
+  }
+
+  function escapeHtml(str){
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function spotIcon(){
+    return L.divIcon({
+      className: 'spot-marker-icon',
+      html: '<svg viewBox="0 0 24 32" width="26" height="34"><path d="M12 1C6.5 1 2 5.5 2 11c0 7 10 20 10 20s10-13 10-20c0-5.5-4.5-10-10-10z" fill="currentColor"/><circle cx="12" cy="11" r="4" fill="#0A1420"/></svg>',
+      iconSize: [26, 34],
+      iconAnchor: [13, 33],
+      popupAnchor: [0, -30]
+    });
+  }
+
+  function spotPopupHtml(spot){
+    return '<div class="spot-popup">' +
+      '<div class="spot-popup-name">' + escapeHtml(spot.name) + '</div>' +
+      '<div class="spot-popup-coords">' + formatDDM(spot.lat, spot.lng) + '</div>' +
+      '<button class="spot-popup-delete" onclick="window.__deleteSpot(\'' + spot.id + '\')">Delete spot</button>' +
+      '</div>';
+  }
+
+  function renderSpotMarkers(){
+    spotMarkersLayer.clearLayers();
+    spots.forEach(function(spot){
+      var marker = L.marker([spot.lat, spot.lng], { icon: spotIcon() });
+      marker.bindPopup(spotPopupHtml(spot));
+      spotMarkersLayer.addLayer(marker);
+    });
+  }
+
+  function formatShortDate(iso){
+    var d = new Date(iso);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function renderSpotsList(){
+    var list = document.getElementById('spots-list');
+    document.getElementById('spots-count').textContent = spots.length;
+
+    if (spots.length === 0) {
+      list.innerHTML = '<div class="empty-state">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 21s7-7.8 7-12.5A7 7 0 1 0 5 8.5C5 13.2 12 21 12 21z"/><circle cx="12" cy="8.5" r="2.4"/></svg>' +
+        '<p>No spots saved yet.<br>Tap anywhere on the chart to drop a mark.</p>' +
+        '</div>';
+      return;
+    }
+
+    var sorted = spots.slice().sort(function(a, b){ return new Date(b.savedAt) - new Date(a.savedAt); });
+    list.innerHTML = sorted.map(function(spot){
+      return '<div class="spot-item" data-id="' + spot.id + '" tabindex="0">' +
+        '<div class="spot-item-main">' +
+          '<div class="spot-item-name">' + escapeHtml(spot.name) + '</div>' +
+          '<div class="spot-item-coords">' + formatDDM(spot.lat, spot.lng) + '</div>' +
+          '<div class="spot-item-date">Saved ' + formatShortDate(spot.savedAt) + '</div>' +
+        '</div>' +
+        '<button class="icon-btn spot-delete" aria-label="Delete spot" data-id="' + spot.id + '">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>' +
+        '</button>' +
+      '</div>';
+    }).join('');
+
+    var items = list.querySelectorAll('.spot-item');
+    for (var i = 0; i < items.length; i++) {
+      items[i].querySelector('.spot-item-main').addEventListener('click', (function(el){
+        return function(){ jumpToSpot(el.dataset.id); };
+      })(items[i]));
+    }
+    var delBtns = list.querySelectorAll('.spot-delete');
+    for (var j = 0; j < delBtns.length; j++) {
+      delBtns[j].addEventListener('click', (function(btn){
+        return function(e){ e.stopPropagation(); deleteSpot(btn.dataset.id); };
+      })(delBtns[j]));
+    }
+  }
+
+  function jumpToSpot(id){
+    var spot = spots.filter(function(s){ return s.id === id; })[0];
+    if (!spot) return;
+    switchTab('chart');
+    setTimeout(function(){ map.flyTo([spot.lat, spot.lng], 9, { duration: 1 }); }, 80);
+  }
+
+  async function deleteSpot(id){
+    if (!window.confirm('Delete this spot?')) return;
+    spots = spots.filter(function(s){ return s.id !== id; });
+    await persistSpots();
+    renderSpotMarkers();
+    renderSpotsList();
+  }
+  window.__deleteSpot = deleteSpot;
+
+  async function savePendingSpot(){
+    if (!pendingSpot) return;
+    var input = document.getElementById('spot-name-input');
+    var name = input.value.trim() || ('Spot ' + (spots.length + 1));
+    var newSpot = {
+      id: 'sp_' + Date.now(),
+      name: name,
+      lat: pendingSpot.lat,
+      lng: pendingSpot.lng,
+      savedAt: new Date().toISOString()
+    };
+    spots.push(newSpot);
+    await persistSpots();
+    renderSpotMarkers();
+    renderSpotsList();
+    hideCoordCard();
+  }
+
+  /* ---------------- Storage ---------------- */
+
+  async function loadSpots(){
+    try {
+      var res = await window.storage.get('spots', false);
+      spots = (res && res.value) ? JSON.parse(res.value) : [];
+    } catch (e) {
+      spots = [];
+    }
+  }
+
+  async function persistSpots(){
+    try {
+      await window.storage.set('spots', JSON.stringify(spots), false);
+    } catch (e) {
+      console.error('Could not save spots', e);
+    }
+  }
+
+  /* ---------------- Chart controls ---------------- */
+
+  function wireChartControls(){
+    document.getElementById('coord-dismiss').addEventListener('click', hideCoordCard);
+    document.getElementById('save-spot-btn').addEventListener('click', savePendingSpot);
+    document.getElementById('spot-name-input').addEventListener('keydown', function(e){
+      if (e.key === 'Enter') savePendingSpot();
+    });
+    document.getElementById('fab-recenter').addEventListener('click', function(){
+      map.flyTo(DEFAULT_CENTER, DEFAULT_ZOOM, { duration: 1 });
+    });
+    document.getElementById('banner-dismiss').addEventListener('click', function(){
+      document.getElementById('data-banner').classList.remove('visible');
+    });
+  }
+
+  /* ---------------- Tabs ---------------- */
+
+  function initTabs(){
+    var btns = document.querySelectorAll('.tab-btn');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].addEventListener('click', function(){ switchTab(this.dataset.tab); });
+    }
+  }
+
+  function switchTab(tab){
+    var views = document.querySelectorAll('.view');
+    for (var i = 0; i < views.length; i++) views[i].classList.remove('active');
+    document.getElementById('view-' + tab).classList.add('active');
+
+    var btns = document.querySelectorAll('.tab-btn');
+    for (var j = 0; j < btns.length; j++) btns[j].classList.toggle('active', btns[j].dataset.tab === tab);
+
+    if (tab === 'chart') {
+      setTimeout(function(){ map.invalidateSize(); }, 60);
+    }
+  }
+
+})();
+</script>
+</body>
+</html>
