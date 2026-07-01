@@ -55,9 +55,24 @@
   #view-spots, #view-info{ overflow-y:auto; -webkit-overflow-scrolling:touch; }
 
   /* ---------- Chart view ---------- */
+  .control-row{
+    display:flex; align-items:center; gap:10px; padding:10px 16px; flex-shrink:0;
+    background:var(--bg-panel); border-bottom:1px solid var(--border-subtle);
+  }
+  .layer-toggle{
+    display:flex; flex-shrink:0; background:var(--bg-panel-raised); border-radius:999px;
+    padding:3px; border:1px solid var(--border-subtle);
+  }
+  .toggle-btn{
+    padding:6px 13px; border-radius:999px; border:none; background:none; cursor:pointer;
+    color:var(--text-secondary); font-family:var(--font-mono); font-size:11.5px; font-weight:600;
+    white-space:nowrap;
+  }
+  .toggle-btn.active{ background:var(--accent-cool); color:#04222A; }
+
   .date-chip-row{
-    display:flex; gap:8px; padding:12px 16px; overflow-x:auto; flex-shrink:0;
-    background:var(--bg-panel); -webkit-overflow-scrolling:touch; scrollbar-width:none;
+    display:flex; gap:8px; overflow-x:auto; flex:1; min-width:0;
+    -webkit-overflow-scrolling:touch; scrollbar-width:none;
   }
   .date-chip-row::-webkit-scrollbar{ display:none; }
   .date-chip{
@@ -130,6 +145,7 @@
   .coord-readout{ display:flex; flex-direction:column; gap:2px; }
   .coord-label{ font-family:var(--font-mono); font-size:10px; letter-spacing:0.1em; color:var(--text-tertiary); }
   .coord-value{ font-family:var(--font-mono); font-size:15px; color:var(--text-primary); font-weight:500; }
+  .coord-temp{ font-family:var(--font-mono); font-size:12.5px; color:var(--accent-warm); font-weight:600; min-height:15px; }
   .coord-card-form{ display:flex; gap:8px; }
   #spot-name-input{
     flex:1; background:var(--bg-panel-raised); border:1px solid var(--border-subtle); border-radius:10px;
@@ -220,7 +236,13 @@
 
     <!-- CHART -->
     <section id="view-chart" class="view active">
-      <div class="date-chip-row" id="date-chips"></div>
+      <div class="control-row">
+        <div class="layer-toggle" id="layer-toggle">
+          <button class="toggle-btn active" data-mode="composite" type="button">Composite</button>
+          <button class="toggle-btn" data-mode="hourly" type="button">Hourly</button>
+        </div>
+        <div class="date-chip-row" id="date-chips"></div>
+      </div>
       <div class="map-wrap">
         <div id="map"></div>
 
@@ -251,6 +273,7 @@
             <div class="coord-readout">
               <span class="coord-label">MARK</span>
               <span class="coord-value" id="coord-text">—</span>
+              <span class="coord-temp" id="coord-temp"></span>
             </div>
             <button class="icon-btn" id="coord-dismiss" aria-label="Dismiss">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
@@ -290,12 +313,14 @@
         </ul>
 
         <h2>About this data</h2>
-        <p>Sea surface temperature comes from NASA's GHRSST MUR analysis (~1km resolution, updated daily), served through NASA's Global Imagery Browse Services. Imagery can lag a day or two behind real time depending on satellite processing.</p>
+        <p><strong>Composite</strong> is the MUR analysis (JPL/PO.DAAC) — satellite passes blended into one gap-free global picture at ~1km resolution, updated once a day with about a day of lag.</p>
+        <p><strong>Hourly</strong> is read directly off GOES-19, NOAA's geostationary weather satellite parked over the Americas. It updates every hour but only sees through clear sky, so cloudy stretches will show gaps until the next clear pass.</p>
+        <p>Tap anywhere on the water to drop a mark — if a reading is available at that point, the temperature shows up right in the mark card.</p>
 
         <div class="info-attribution">
           <h2 style="margin-top:0">About this prototype</h2>
           <p>This is a working preview built for the web so you can try it right now — no app-store install needed. A native iOS/Android build would add push alerts when a break forms near a saved spot, offline chart caching, and on-device GPS. Your saved spots persist privately across visits.</p>
-          <p>Basemap © OpenStreetMap contributors, © CARTO. Sea surface temperature imagery courtesy NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System.</p>
+          <p>Basemap © OpenStreetMap contributors, © CARTO. Sea surface temperature courtesy NOAA CoastWatch/AOML and NASA JPL PO.DAAC (GHRSST MUR), served via ERDDAP. Coastline reference from NOAA NCEI.</p>
         </div>
       </div>
     </section>
@@ -327,16 +352,33 @@
   var DEFAULT_CENTER = [34.3, -74.5];
   var DEFAULT_ZOOM = 7;
 
+  // Verified live NOAA/PO.DAAC data sources, served via NOAA CoastWatch's ERDDAP WMS.
+  // Coastlines is ERDDAP's built-in reference layer, stacked on top in the same request.
+  var SST_SOURCES = {
+    composite: {
+      wmsUrl: 'https://cwcgom.aoml.noaa.gov/erddap/wms/jplMURSST41/request',
+      layerName: 'jplMURSST41:analysed_sst',
+      attribution: 'SST: NASA JPL PO.DAAC (GHRSST MUR) via NOAA CoastWatch'
+    },
+    hourly: {
+      wmsUrl: 'https://cwcgom.aoml.noaa.gov/erddap/wms/goes19SSThourly/request',
+      layerName: 'goes19SSThourly:sst',
+      attribution: 'SST: NOAA GOES-19 via CoastWatch/AOML'
+    }
+  };
+
   var map, sstLayer, spotMarkersLayer, tempMarker;
   var spots = [];
   var pendingSpot = null;
   var tileErrorCount = 0;
   var bannerShown = false;
+  var currentMode = 'composite';
 
   document.addEventListener('DOMContentLoaded', init);
 
   async function init(){
     initMap();
+    initLayerToggle();
     initDateChips();
     initTabs();
     wireChartControls();
@@ -362,39 +404,74 @@
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
     }).addTo(map);
 
-    sstLayer = L.tileLayer(
-      'https://gibs-{s}.earthdata.nasa.gov/wmts/epsg3857/best/{layer}/default/{time}/{tileMatrixSet}/{z}/{y}/{x}.png',
-      {
-        layer: 'GHRSST_L4_MUR_Sea_Surface_Temperature',
-        tileMatrixSet: 'GoogleMapsCompatible_Level7',
-        time: 'default',
-        subdomains: 'abc',
-        tileSize: 256,
-        maxNativeZoom: 7,
-        maxZoom: 12,
-        noWrap: true,
-        opacity: 0.9,
-        bounds: [[-85.0511287776, -179.999999975], [85.0511287776, 179.999999975]],
-        attribution: 'SST: NASA GIBS (GHRSST MUR)'
-      }
-    ).addTo(map);
-
-    sstLayer.on('tileerror', function(){
-      tileErrorCount++;
-      if (tileErrorCount >= 6 && !bannerShown) {
-        bannerShown = true;
-        document.getElementById('data-banner').classList.add('visible');
-      }
-    });
-    sstLayer.on('load', function(){
-      document.getElementById('loading-pill').classList.add('hidden');
-    });
+    sstLayer = buildSstLayer(currentMode, null);
+    sstLayer.addTo(map);
 
     spotMarkersLayer = L.layerGroup().addTo(map);
 
     map.on('click', onMapClick);
 
     setTimeout(function(){ map.invalidateSize(); }, 120);
+  }
+
+  // Builds a WMS tile layer for the given mode ('composite' | 'hourly').
+  // timeValue null/undefined means "omit the time param" so the server returns
+  // its own most-recent frame — the safest option since it never requires guessing
+  // an exact timestamp the server actually has data for.
+  function buildSstLayer(mode, timeValue){
+    var src = SST_SOURCES[mode];
+    var params = {
+      layers: src.layerName + ',Coastlines',
+      format: 'image/png',
+      transparent: true,
+      version: '1.3.0',
+      opacity: 0.88,
+      attribution: src.attribution
+    };
+    if (timeValue) params.time = timeValue;
+
+    var layer = L.tileLayer.wms(src.wmsUrl, params);
+
+    layer.on('tileerror', function(){
+      tileErrorCount++;
+      if (tileErrorCount >= 6 && !bannerShown) {
+        bannerShown = true;
+        document.getElementById('data-banner').classList.add('visible');
+      }
+    });
+    layer.on('load', function(){
+      document.getElementById('loading-pill').classList.add('hidden');
+    });
+
+    return layer;
+  }
+
+  function switchLayerMode(mode){
+    if (mode === currentMode) return;
+    currentMode = mode;
+    tileErrorCount = 0;
+    bannerShown = false;
+    document.getElementById('data-banner').classList.remove('visible');
+    document.getElementById('loading-pill').classList.remove('hidden');
+
+    map.removeLayer(sstLayer);
+    sstLayer = buildSstLayer(currentMode, null);
+    sstLayer.addTo(map);
+
+    initDateChips();
+  }
+
+  function initLayerToggle(){
+    var btns = document.querySelectorAll('.toggle-btn');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].addEventListener('click', function(){
+        if (this.classList.contains('active')) return;
+        var all = document.querySelectorAll('.toggle-btn');
+        for (var j = 0; j < all.length; j++) all[j].classList.remove('active');
+        this.classList.add('active');
+        switchLayerMode(this.dataset.mode);
+      });
+    }
   }
 
   /* ---------------- Date chips ---------------- */
@@ -405,15 +482,37 @@
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
   }
 
-  function initDateChips(){
-    var container = document.getElementById('date-chips');
+  function buildCompositeChips(){
+    var chips = [{ label: 'Latest', value: null }];
     var today = new Date();
-    var chips = [{ label: 'Latest', value: 'default' }];
     for (var i = 1; i <= 4; i++) {
       var d = new Date(today);
-      d.setDate(d.getDate() - i);
-      chips.push({ label: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), value: isoDate(d) });
+      d.setUTCDate(d.getUTCDate() - i);
+      var iso = d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()) + 'T09:00:00Z';
+      chips.push({
+        label: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }),
+        value: iso
+      });
     }
+    return chips;
+  }
+
+  function buildHourlyChips(){
+    var now = new Date();
+    now.setUTCMinutes(0, 0, 0);
+    var offsets = [0, 3, 6, 12, 24];
+    return offsets.map(function(h){
+      if (h === 0) return { label: 'Latest', value: null };
+      var d = new Date(now.getTime() - h * 3600 * 1000);
+      var iso = d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()) +
+        'T' + pad(d.getUTCHours()) + ':00:00Z';
+      return { label: h + 'h ago', value: iso };
+    });
+  }
+
+  function initDateChips(){
+    var container = document.getElementById('date-chips');
+    var chips = currentMode === 'hourly' ? buildHourlyChips() : buildCompositeChips();
     container.innerHTML = '';
     chips.forEach(function(chip, idx){
       var btn = document.createElement('button');
@@ -425,12 +524,16 @@
     });
   }
 
-  function selectDateChip(btn, value){
+  function selectDateChip(btn, timeValue){
     var all = document.querySelectorAll('.date-chip');
     for (var i = 0; i < all.length; i++) all[i].classList.remove('active');
     btn.classList.add('active');
-    sstLayer.options.time = value;
     document.getElementById('loading-pill').classList.remove('hidden');
+    if (timeValue) {
+      sstLayer.wmsParams.time = timeValue;
+    } else {
+      delete sstLayer.wmsParams.time;
+    }
     sstLayer.redraw();
   }
 
@@ -454,11 +557,66 @@
       radius: 7, color: '#FF8A3D', weight: 2, fillColor: '#FF8A3D', fillOpacity: 0.85
     }).addTo(map);
     document.getElementById('coord-text').textContent = formatDDM(pendingSpot.lat, pendingSpot.lng);
+    var tempEl = document.getElementById('coord-temp');
+    tempEl.textContent = 'Reading temperature…';
     document.getElementById('coord-card').classList.add('visible');
+    fetchTempAtPoint(e.latlng, tempEl);
+  }
+
+  // Queries the live SST value at a point via the OGC WMS GetFeatureInfo request —
+  // the same live layer already on screen, just asked for the number instead of a picture.
+  // Fails silently (clears the line) so a slow/unsupported response never blocks the
+  // core mark-and-save flow.
+  function fetchTempAtPoint(latlng, tempEl){
+    try {
+      var src = SST_SOURCES[currentMode];
+      var size = map.getSize();
+      var bounds = map.getBounds();
+      var sw = map.options.crs.project(bounds.getSouthWest());
+      var ne = map.options.crs.project(bounds.getNorthEast());
+      var point = map.latLngToContainerPoint(latlng);
+
+      var params = {
+        service: 'WMS',
+        version: '1.3.0',
+        request: 'GetFeatureInfo',
+        layers: src.layerName,
+        query_layers: src.layerName,
+        crs: 'EPSG:3857',
+        bbox: [sw.x, sw.y, ne.x, ne.y].join(','),
+        width: Math.round(size.x),
+        height: Math.round(size.y),
+        i: Math.round(point.x),
+        j: Math.round(point.y),
+        info_format: 'text/plain'
+      };
+      if (sstLayer.wmsParams.time) params.time = sstLayer.wmsParams.time;
+
+      var qs = Object.keys(params).map(function(k){
+        return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+      }).join('&');
+
+      fetch(src.wmsUrl + '?' + qs)
+        .then(function(r){ return r.ok ? r.text() : ''; })
+        .then(function(text){
+          if (tempEl !== document.getElementById('coord-temp')) return;
+          var match = text && text.match(/-?\d+\.?\d*/);
+          var c = match ? parseFloat(match[0]) : NaN;
+          if (isFinite(c) && c > -5 && c < 45) {
+            tempEl.textContent = (c * 9 / 5 + 32).toFixed(1) + '°F  (' + c.toFixed(1) + '°C)';
+          } else {
+            tempEl.textContent = 'No reading here (cloud gap or land)';
+          }
+        })
+        .catch(function(){ tempEl.textContent = ''; });
+    } catch (err) {
+      tempEl.textContent = '';
+    }
   }
 
   function hideCoordCard(){
     document.getElementById('coord-card').classList.remove('visible');
+    document.getElementById('coord-temp').textContent = '';
     if (tempMarker) { map.removeLayer(tempMarker); tempMarker = null; }
     pendingSpot = null;
     document.getElementById('spot-name-input').value = '';
